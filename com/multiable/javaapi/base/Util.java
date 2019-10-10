@@ -3,14 +3,31 @@ package com.multiable.javaapi.base;
 import java.awt.Image;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.sql.Blob;
+import java.sql.Clob;
 import java.sql.Timestamp;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.alibaba.fastjson.parser.ParserConfig;
+import com.alibaba.fastjson.serializer.SerializeConfig;
+
 public class Util {
+
+	public static void init() {
+		SerializeConfig.getGlobalInstance().put(SqlEntity.class, new SqlEntityScDc());
+		ParserConfig.getGlobalInstance().putDeserializer(SqlEntity.class, new SqlEntityScDc());
+
+		SerializeConfig.getGlobalInstance().put(SqlTable.class, new SqlTableScDc());
+		ParserConfig.getGlobalInstance().putDeserializer(SqlTable.class, new SqlTableScDc());
+	}
 
 	public static void info(Object object) {
 
@@ -319,6 +336,295 @@ public class Util {
 		}
 
 		return date;
+	}
+
+	public static <A extends Iterable<String>> String toStr(A data) {
+		if (data == null) {
+			return "";
+		}
+		StringBuffer sb = new StringBuffer();
+		boolean first = true;
+		for (String info : data) {
+			if (first) {
+				first = false;
+			} else {
+				sb.append(";");
+			}
+			sb.append(info);
+
+		}
+
+		return sb.toString();
+	}
+
+	public static JSONArray genStruJson(SqlTable data) {
+		if (data == null) {
+			return null;
+		}
+
+		JSONArray fields = new JSONArray();
+		for (SqlTableField field : data.getFields()) {
+			JSONObject jsonField = new JSONObject(16, true);
+			jsonField.put("name", field.getName());
+			jsonField.put("classType", field.getClassType().getValue());
+			jsonField.put("fieldClassName", field.getFieldClassName());
+			jsonField.put("fieldClass", field.getFieldClass().getName());
+			fields.add(jsonField);
+		}
+
+		return fields;
+
+	}
+
+	public static JSONArray genDataJson(SqlTable data) {
+		return genDataJson(data, false);
+	}
+
+	public static JSONArray genDataJson(SqlTable data, boolean includeEmpty) {
+		if (data == null) {
+			return null;
+		}
+		JSONArray jsonArray = new JSONArray();
+		for (int i = 1; i <= data.size(); i++) {
+			JSONObject json = new JSONObject(16, true);
+			for (SqlTableField field : data.getFields()) {
+
+				Class<?> clazz = field.getFieldClass();
+				if (isStringType(clazz)) {
+					String sVal = data.getString(i, field.getName());
+					if (!isEmpty(sVal) || includeEmpty) {
+						json.put(field.getName(), sVal);
+					}
+
+				} else if (isDoubleType(clazz)) {
+					double dVal = data.getDouble(i, field.getName());
+					if (dVal != 0.0 || includeEmpty) {
+						json.put(field.getName(), dVal);
+					}
+				} else if (isIntegerClass(clazz)) {
+					int iVal = data.getInteger(i, field.getName());
+					if (iVal != 0 || includeEmpty) {
+						json.put(field.getName(), iVal);
+					}
+				} else if (isLongClass(clazz)) {
+					long lVal = data.getLong(i, field.getName());
+					if (lVal != 0l || includeEmpty) {
+						json.put(field.getName(), lVal);
+					}
+				} else if (isBooleanClass(clazz)) {
+					boolean bVal = data.getBoolean(i, field.getName());
+					if (bVal || includeEmpty) {
+						json.put(field.getName(), bVal);
+					}
+
+				} else {
+					Object fieldValue = data.getValue(i, field.getName());
+					if (fieldValue instanceof Date) {
+						// if(DateLib.isEmptyDate(date))
+						json.put(field.getName(), date2Str((Date) fieldValue, "yyyy-MM-dd HH:mm:ss"));
+					} else {
+						if (fieldValue != null) {
+							json.put(field.getName(), fieldValue);
+						}
+					}
+				}
+
+			}
+			jsonArray.add(json);
+		}
+		return jsonArray;
+
+	}
+
+	public static SqlTable createTableFromJsonStru(JSONArray fieldArray) {
+		if (fieldArray == null) {
+			return null;
+		}
+		SqlTable data = new SqlTable();
+
+		for (int i = 0; i < fieldArray.size(); i++) {
+			JSONObject jsonField = (JSONObject) fieldArray.get(i);
+			SqlTableField sqlTableField = new SqlTableField();
+			sqlTableField.setName(jsonField.getString("name"));
+
+			sqlTableField.setClassType(SqlClassType.getSqlClassType(Integer.parseInt(jsonField.getString("classType"))));
+			try {
+				// ClassUtils.forName(jsonField.getString("fieldClass")) .classForPrimitive(typeStr)
+
+				sqlTableField.setFieldClass(getClass(jsonField.getString("fieldClass")));
+			} catch (ClassNotFoundException e) {
+				e.printStackTrace();
+			}
+
+			data.addField(sqlTableField);
+		}
+
+		return data;
+	}
+
+	public static void appendJsonValues(SqlTable data, JSONArray valueArray) {
+		appendJsonValues(data, valueArray, false);
+	}
+
+	public static void appendJsonValues(SqlTable data, JSONArray valueArray, boolean skipEmptyVal) {
+		if (data == null || valueArray == null) {
+			return;
+		}
+
+		data.addRows(valueArray.size());
+
+		for (int i = 0; i < valueArray.size(); i++) {
+			JSONObject jsonValue = (JSONObject) valueArray.get(i);
+			setJsonValToTable(data, jsonValue, skipEmptyVal, i + 1);
+		}
+
+	}
+
+	public static void setJsonValToTable(SqlTable data, JSONObject jsonValue, boolean skipEmptyVal, int index) {
+		if (data == null || jsonValue == null || index <= 0) {
+			return;
+		}
+
+		for (SqlTableField field : data.getFields()) {
+			if (skipEmptyVal && !jsonValue.containsKey(field.getName())) {
+				continue;
+			}
+
+			Object value = jsonValue.get(field.getName());
+			Class<?> clazz = field.getFieldClass();
+			if (isStringType(clazz)) {
+				data.setString(index, field.getName(), String.valueOf(value));
+			} else if (isDoubleType(clazz)) {
+				data.setDouble(index, field.getName(), toDouble(value));
+			} else if (isIntegerClass(clazz)) {
+				data.setInteger(index, field.getName(), toInteger(value));
+			} else if (isLongClass(clazz)) {
+				data.setLong(index, field.getName(), toLong(value));
+			} else if (isBooleanClass(clazz)) {
+				data.setBoolean(index, field.getName(), toBoolean(value));
+			} else {
+
+				Object objectValue = null;
+				// date
+				if (clazz.equals(java.util.Date.class) || clazz.equals(java.sql.Date.class) || clazz.equals(java.sql.Timestamp.class)
+						|| clazz.equals(java.sql.Time.class)) {
+					if (value != null) {
+						objectValue = createDateTime(String.valueOf(value));
+					}
+				} else if (clazz.equals(java.lang.Byte[].class)) {
+					continue;
+				} else if (clazz.equals(Clob.class)) {
+					continue;
+				} else if (clazz.equals(Blob.class)) {
+					continue;
+				} else {
+					objectValue = value;
+
+				}
+
+				data.setObject(index, field.getName(), objectValue);
+			}
+		}
+	}
+
+	public static String date2Str(Date date, String dateFormat) {
+		if (date == null) {
+			return "";// TODO 1900-01-01?
+		}
+		SimpleDateFormat sdf = new SimpleDateFormat(dateFormat);
+
+		String dateStr = sdf.format(date);
+
+		return dateStr;
+	}
+
+	public static Class getClass(String className) throws ClassNotFoundException {
+		return getClass(className, true);
+	}
+
+	public static Class getClass(String className, boolean initialize) throws ClassNotFoundException {
+		ClassLoader contextCL = Thread.currentThread().getContextClassLoader();
+		ClassLoader loader = contextCL == null ? Util.class.getClassLoader() : contextCL;
+		return getClass(loader, className, initialize);
+	}
+
+	public static final char PACKAGE_SEPARATOR_CHAR = '.';
+	public static final char INNER_CLASS_SEPARATOR_CHAR = '$';
+	private static final Map<String, String> abbreviationMap = new HashMap<>();
+	static {
+		abbreviationMap.put("int", "I");
+		abbreviationMap.put("boolean", "Z");
+		abbreviationMap.put("float", "F");
+		abbreviationMap.put("long", "J");
+		abbreviationMap.put("short", "S");
+		abbreviationMap.put("byte", "B");
+		abbreviationMap.put("double", "D");
+		abbreviationMap.put("char", "C");
+	}
+
+	public static Class getClass(ClassLoader classLoader, String className, boolean initialize) throws ClassNotFoundException {
+		try {
+			Class clazz;
+			if (abbreviationMap.containsKey(className)) {
+				String clsName = "[" + abbreviationMap.get(className);
+				clazz = Class.forName(clsName, initialize, classLoader).getComponentType();
+			} else {
+				clazz = Class.forName(toCanonicalName(className), initialize, classLoader);
+			}
+			return clazz;
+		} catch (ClassNotFoundException ex) {
+			// allow path separators (.) as inner class name separators
+			int lastDotIndex = className.lastIndexOf(PACKAGE_SEPARATOR_CHAR);
+
+			if (lastDotIndex != -1) {
+				try {
+					return getClass(classLoader, className.substring(0, lastDotIndex) + INNER_CLASS_SEPARATOR_CHAR + className.substring(lastDotIndex + 1),
+							initialize);
+				} catch (ClassNotFoundException ex2) {
+				}
+			}
+
+			throw ex;
+		}
+	}
+
+	private static String toCanonicalName(String className) {
+		className = deleteWhitespace(className);
+		if (className == null) {
+			throw new NullPointerException("className");
+		} else if (className.endsWith("[]")) {
+			StringBuilder classNameBuffer = new StringBuilder();
+			while (className.endsWith("[]")) {
+				className = className.substring(0, className.length() - 2);
+				classNameBuffer.append("[");
+			}
+			String abbreviation = abbreviationMap.get(className);
+			if (abbreviation != null) {
+				classNameBuffer.append(abbreviation);
+			} else {
+				classNameBuffer.append("L").append(className).append(";");
+			}
+			className = classNameBuffer.toString();
+		}
+		return className;
+	}
+
+	public static String deleteWhitespace(String str) {
+		if (isEmpty(str)) {
+			return str;
+		}
+		int sz = str.length();
+		char[] chs = new char[sz];
+		int count = 0;
+		for (int i = 0; i < sz; i++) {
+			if (!Character.isWhitespace(str.charAt(i))) {
+				chs[count++] = str.charAt(i);
+			}
+		}
+		if (count == sz) {
+			return str;
+		}
+		return new String(chs, 0, count);
 	}
 
 }

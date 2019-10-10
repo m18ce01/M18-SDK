@@ -15,6 +15,7 @@ import java.util.Set;
 public class SqlTable implements Iterable<Integer>, Serializable {
 
 	private static final long serialVersionUID = 1L;
+
 	/**
 	 * The attribute key representing begin of file.
 	 */
